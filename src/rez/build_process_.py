@@ -99,6 +99,7 @@ class BuildProcess(object):
         hook_names = self.package.config.release_hooks or []
         self.hooks = create_release_hooks(hook_names, working_dir)
         
+        print "Package Format:", self.package.format(self.package.config.build_directory)
         self.build_path = self.package.config.build_directory.format(package=package)
         if not os.path.isabs(self.build_path):
             self.build_path = os.path.join(self.working_dir,
