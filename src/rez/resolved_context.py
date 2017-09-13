@@ -243,7 +243,7 @@ class ResolvedContext(object):
 
         def _package_load_callback(package):
             if package_load_callback:
-                _package_load_callback(package)
+                package_load_callback(package)
             self.num_loaded_packages += 1
 
         request = self.requested_packages(include_implicit=True)
@@ -1039,14 +1039,17 @@ class ResolvedContext(object):
     def apply(self, parent_environ=None):
         """Apply the context to the current python session.
 
-        Note that this updates os.environ and possibly sys.path.
+        Note that this updates os.environ and possibly sys.path, if
+        `parent_environ` is not provided.
 
-        @param environ Environment to interpret the context within, defaults to
-            os.environ if None.
+        Args:
+            parent_environ: Environment to interpret the context within,
+                defaults to os.environ if None.
         """
         interpreter = Python(target_environ=os.environ)
         executor = self._create_executor(interpreter, parent_environ)
         self._execute(executor)
+        interpreter.apply_environ()
 
     @_on_success
     def which(self, cmd, parent_environ=None, fallback=False):
@@ -1094,7 +1097,13 @@ class ResolvedContext(object):
         Note:
             This does not alter the current python session.
         """
-        interpreter = Python(target_environ={})
+        if parent_environ in (None, os.environ):
+            target_environ = {}
+        else:
+            target_environ = parent_environ.copy()
+
+        interpreter = Python(target_environ=target_environ)
+
         executor = self._create_executor(interpreter, parent_environ)
         self._execute(executor)
         return interpreter.subprocess(args, **subprocess_kwargs)
