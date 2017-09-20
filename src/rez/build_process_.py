@@ -3,6 +3,7 @@ from rez.exceptions import BuildProcessError, BuildContextResolveError, \
     ReleaseHookCancellingError, RezError, ReleaseError, BuildError, \
     ReleaseVCSError
 from rez.utils.logging_ import print_warning
+from rez.utils.scope import scoped_format
 from rez.resolved_context import ResolvedContext
 from rez.release_hook import create_release_hooks
 from rez.resolver import ResolverStatus
@@ -99,11 +100,11 @@ class BuildProcess(object):
         hook_names = self.package.config.release_hooks or []
         self.hooks = create_release_hooks(hook_names, working_dir)
         
-        print "Package Format:", self.package.format(self.package.config.build_directory)
-        self.build_path = self.package.config.build_directory.format(package=package)
+        self.build_path = scoped_format(self.package.config.build_directory, package=package)
+        
         if not os.path.isabs(self.build_path):
-            self.build_path = os.path.join(self.working_dir,
-                                       self.build_path)
+            self.build_path = os.path.join(self.working_dir, self.build_path)
+        print "BUILD_PATH:", self.build_path
 
     def build(self, install_path=None, clean=False, install=False, variants=None):
         """Perform the build process.
