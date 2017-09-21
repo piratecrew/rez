@@ -21,7 +21,6 @@ import shutil
 import sys
 import os
 
-
 class InstallMode(Enum):
     # don't install dependencies. Build may fail, for example the package may
     # need to compile against a dependency. Will work for pure python though.
@@ -270,6 +269,12 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
             if os.path.exists(source_file):
                 destination_file = installed_file[0].split(stagingsep)[1]
                 exe = False
+                shebang = False
+                # Change to generic shebang
+                with open(source_file, 'ra') as f:
+                    first_line = f.readline()
+                    if first_line.startswith("#!/"):
+                        shebang = True
 
                 if is_exe(source_file) and \
                         destination_file.startswith("%s%s" % ("bin", os.path.sep)):
@@ -277,7 +282,7 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
                     tools.append(_file)
                     exe = True
 
-                data = [destination_file, exe]
+                data = [destination_file, exe, shebang]
                 src_dst_lut[source_file] = data
             else:
                 _log("Source file does not exist: " + source_file + "!")
@@ -288,12 +293,26 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
             variant
             """
             for source_file, data in src_dst_lut.items():
-                destination_file, exe = data
+                destination_file, exe, shebang = data
                 destination_file = os.path.normpath(os.path.join(path, destination_file))
 
                 if not os.path.exists(os.path.dirname(destination_file)):
                     os.makedirs(os.path.dirname(destination_file))
-
+                if shebang:
+                    print "replace shebang", source_file
+                    tmp_filename = source_file+".tmp"
+                    shutil.move(source_file, tmp_filename)
+                    print "move ->", tmp_filename
+                    with open(tmp_filename, 'r') as tmp_handle:
+                        with open(source_file, 'w') as src_handle:
+                            first = True
+                            for line in tmp_handle:
+                                if first:
+                                    line = "#!/usr/bin/env python\n" #TODO: make configurable
+                                    first = False
+                                src_handle.write(line)
+                    shutil.copystat(tmp_filename, source_file)
+                    os.remove(tmp_filename)
                 shutil.copyfile(source_file, destination_file)
                 if exe:
                     shutil.copystat(source_file, destination_file)
