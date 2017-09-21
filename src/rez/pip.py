@@ -319,12 +319,11 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
                     print "replace shebang", source_file
                     tmp_filename = source_file+".tmp"
                     shutil.move(source_file, tmp_filename)
-                    print "move ->", tmp_filename
                     with open(tmp_filename, 'r') as tmp_handle:
                         with open(source_file, 'w') as src_handle:
                             first = True
                             for line in tmp_handle:
-                                if first:
+                                if first and 'python' in line:
                                     line = "#!/usr/bin/env python\n" #TODO: make configurable
                                     first = False
                                 src_handle.write(line)
