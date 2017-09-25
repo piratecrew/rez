@@ -20,6 +20,7 @@ import os.path
 import shutil
 import sys
 import os
+import re
 
 class InstallMode(Enum):
     # don't install dependencies. Build may fail, for example the package may
@@ -78,8 +79,7 @@ def _get_dependencies(requirement, distributions):
         else:
             name = get_distrubution_name(package)
             result.append(name)
-
-    return result
+    return sorted(result, reverse=True)
 
 
 def is_exe(fpath):
@@ -97,8 +97,11 @@ def is_compiled(fpath):
     if sys.platform.startswith('linux'):
         mime_type = subprocess.check_output(['file', '--mime', fpath]).split()[1][:-1]
         return mime_type in ('application/x-archive', 'application/x-sharedlib', 'application/x-executable')
+    elif sys.platform.startswith('darwin'):
+        mime_type = subprocess.check_output(['file', '--mime', fpath]).split()[1][:-1]
+        return mime_type == 'application/x-mach-binary'
     else:
-        raise OSError('os_compiled not supported on this os')
+        raise OSError('is_compiled not supported on this os')
 
 
 def run_pip_command(command_args, pip_version=None, python_version=None):
@@ -119,20 +122,15 @@ def run_pip_command(command_args, pip_version=None, python_version=None):
         return context.execute_shell(command=command, block=False)
 
 
-def find_pip(pip_version=None, python_version=None):
+def find_pip(context=None):
     """Find a pip exe using the given python version.
 
     Returns:
-        2-tuple:
-            str: pip executable;
-            `ResolvedContext`: Context containing pip, or None if we fell back
-                to system pip.
+        str: pip executable;
     """
     pip_exe = "pip"
 
-    try:
-        context = create_context(pip_version, python_version)
-    except BuildError as e:
+    if context is None:
         # fall back on system pip. Not ideal but at least it's something
         from rez.backport.shutilwhich import which
 
@@ -142,14 +140,13 @@ def find_pip(pip_version=None, python_version=None):
             print_warning(
                 "pip rez package could not be found; system 'pip' command (%s) "
                 "will be used instead." % pip_exe)
-            context = None
         else:
-            raise e
+            raise RuntimeError("Could not find a system pip")
 
-    return pip_exe, context
+    return pip_exe
 
 
-def create_context(pip_version=None, python_version=None):
+def create_context(pip_version=None, python_version=None, extra_packages=None):
     """Create a context containing the specific pip and python.
 
     Args:
@@ -184,6 +181,8 @@ def create_context(pip_version=None, python_version=None):
 
     # use pip + latest python to perform pip download operations
     request = [pip_req, py_req]
+    if extra_packages is not None:
+        request.extend(extra_packages)
 
     with convert_errors(from_=(PackageFamilyNotFoundError, PackageNotFoundError),
                         to=BuildError, msg="Cannot run - pip or python rez "
@@ -199,7 +198,8 @@ def create_context(pip_version=None, python_version=None):
 
 
 def pip_install_package(source_name, pip_version=None, python_version=None,
-                        mode=InstallMode.min_deps, release=False, default_variant=None):
+                        mode=InstallMode.min_deps, release=False, default_variant=None,
+                        build_requires=None, requires=None, ignore_installed=False):
     """Install a pip-compatible python package as a rez package.
     Args:
         source_name (str): Name of package or archive/url containing the pip
@@ -227,7 +227,13 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
     else:
         default_variant = default_variant.split(",")
 
-    pip_exe, context = find_pip(pip_version, python_version)
+    extra_packages = []
+    for packages in filter(lambda x: x is not None, (build_requires, requires)):
+        extra_packages.extend(packages)
+    extra_packages = extra_packages if extra_packages else None
+
+    context = create_context(pip_version, python_version, extra_packages)
+    pip_exe = find_pip(context)
 
     # TODO: should check if packages_path is writable before continuing with pip
     #
@@ -265,8 +271,9 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
            "--install-option=--install-lib=%s" % destpath,
            "--install-option=--install-scripts=%s" % binpath,
            "--install-option=--install-headers=%s" % incpath,
-           "--install-option=--install-data=%s" % datapath,
-           "--ignore-installed"]
+           "--install-option=--install-data=%s" % datapath]
+    if ignore_installed:
+        cmd.append("--ignore-installed")
 
     if mode == InstallMode.no_deps:
         cmd.append("--no-deps")
@@ -280,11 +287,28 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
     _cmd(context=context, command=cmd, environ=env)
     _system = System()
 
-    # Collect resulting python packages using distlib
-    distribution_path = DistributionPath([destpath], include_egg=True)
+    # Get the PYTHONPATHS for extra_packages
+    if ignore_installed:
+        contexts_paths =[]
+    else:
+        extra_packages_context = ResolvedContext(extra_packages)
+        contexts_paths = extra_packages_context.get_environ().get("PYTHONPATH")
+        if contexts_paths is not None:
+            contexts_paths = contexts_paths.split(":")
+
+    # Collect resulting python packages and extra_packages using distlib
+    distribution_path = DistributionPath([destpath]+contexts_paths, include_egg=True)
     distributions = [d for d in distribution_path.get_distributions()]
 
     for distribution in distribution_path.get_distributions():
+        # We are skipping distributions that are not part of the pip install
+        if not distribution.path.startswith(destpath):
+            pip_to_rez_name = distribution.name.replace("-", "_")
+            if list(filter(lambda x: x.startswith(pip_to_rez_name), extra_packages)):
+                installed_package = extra_packages_context.get_resolved_package(pip_to_rez_name)
+                print "Requirement", distribution.name, "already satisfied by rez package", installed_package.qualified_package_name
+            continue
+
         requirements = []
         if distribution.metadata.run_requires:
             # Handle requirements. Currently handles conditional environment based
@@ -308,7 +332,6 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
 
         for installed_file in distribution.list_installed_files(allow_fail=True):
             source_file = os.path.normpath(os.path.join(destpath, installed_file[0]))
-
             if os.path.exists(source_file):
                 destination_file = installed_file[0].split(stagingsep)[1]
                 exe = False
@@ -345,7 +368,6 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
                 if not os.path.exists(os.path.dirname(destination_file)):
                     os.makedirs(os.path.dirname(destination_file))
                 if shebang:
-                    print "replace shebang", source_file
                     tmp_filename = source_file+".tmp"
                     shutil.move(source_file, tmp_filename)
                     with open(tmp_filename, 'r') as tmp_handle:
@@ -395,8 +417,29 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
                 pkg.description = distribution.metadata.summary
 
             pkg.variants = [variant_reqs]
-            if requirements:
-                pkg.requires = requirements
+            if requirements: #TODO: we should add packages that are provided with --requires or --build-requires, even if they aren't pip packages.
+                pkg_build_requires = []
+                pkg_requires = []                
+
+                # re to match the package without ranges.
+                name_re = re.compile(r'^!{0,1}([A-Za-z_\.]+)-.*')
+
+                for requirement in requirements:
+                    m = name_re.match(requirement)
+                    if m:
+                        if build_requires and m.group(1) in build_requires:
+                            pkg_build_requires.append(requirement)
+                        else:
+                            pkg_requires.append(requirement)
+                    else:
+                        # If we cant match the package name something is probably wrong.
+                        # But for now we just fall back and add it to requires
+                        pkg_requires.append(requirement)
+
+                if pkg_build_requires:
+                    pkg.build_requires = pkg_build_requires
+                if pkg_requires:
+                    pkg.requires = pkg_requires
 
             commands = []
             commands.append("env.PYTHONPATH.append('{root}/python')")

@@ -16,6 +16,9 @@ def setup_parser(parser, completions=False):
         "-i", "--install", action="store_true",
         help="install the package")
     parser.add_argument(
+        "--ignore-installed", action="store_true",
+        help="ignore installed packages")
+    parser.add_argument(
         "-s", "--search", action="store_true",
         help="search for the package on PyPi")
     parser.add_argument(
@@ -26,6 +29,12 @@ def setup_parser(parser, completions=False):
         "--variant", dest="variant",
         help="Specify the variant requirements for package "
         " default=platform,arch,os")
+    parser.add_argument(
+        "--build-requires", nargs='+',
+        help="packages to use for installation environment and add them to build_requires.")
+    parser.add_argument(
+        "--requires", nargs='+',
+        help="packages to use for installation environment and add them to requires.")
     parser.add_argument(
         "PACKAGES", nargs='+',
         help="package to install or archive/url to install from")
@@ -46,6 +55,7 @@ def command(opts, parser, extra_arg_groups=None):
     installed_variants = set()
     skipped_variants = set()
     failed_variants = set()
+
     for package in opts.PACKAGES:
         try:
             installed, skipped = pip_install_package(
@@ -53,15 +63,17 @@ def command(opts, parser, extra_arg_groups=None):
                 pip_version=opts.pip_ver,
                 python_version=opts.py_ver,
                 release=opts.release,
-                default_variant=opts.variant)
+                default_variant=opts.variant,
+                build_requires=opts.build_requires,
+                requires=opts.requires,
+                ignore_installed=opts.ignore_installed)
             if installed is not None:
                 installed_variants.update(installed)
             if skipped is not None:
                 skipped_variants.update(skipped)
-        except:
-            failed_variants.add(package)
-    # print summary
-    #
+        except Exception as e:
+            print "Package", package, "failed to install"
+            raise
 
     def print_variant(v):
         pkg = v.parent
@@ -84,13 +96,11 @@ def command(opts, parser, extra_arg_groups=None):
         for variant in skipped_variants:
             print_variant(variant)
 
-    if skipped_variants:
+    if failed_variants:
         print
         print "%d packages failed to install:" % len(failed_variants)
         for variant in failed_variants:
-            print "  " + variant
-
-    print
+            print "  " + variant[0], type(variant[1]), variant[1]
 
 
 # Copyright 2013-2016 Allan Johns.
