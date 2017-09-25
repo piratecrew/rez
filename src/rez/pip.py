@@ -67,6 +67,9 @@ def _get_dependencies(requirement, distributions):
                     package = "%s (%s)" % (n, v)
                     name, version = parse_name_and_version(package)
                     version = version.replace("==", "")
+                    if version.startswith('!='):
+                        result.append('!{}-{}'.format(get_distrubution_name(name), version[2:]))
+                        continue
                     versions.append(version)
                 version = "".join(versions)
 
@@ -81,6 +84,21 @@ def _get_dependencies(requirement, distributions):
 
 def is_exe(fpath):
         return os.path.exists(fpath) and os.access(fpath, os.X_OK)
+
+def is_compiled(fpath):
+    """Check if the file "fpath" is compiled
+
+    Args:
+        fpath (str): path to a file
+
+    Returns:
+        bool
+    """
+    if sys.platform.startswith('linux'):
+        mime_type = subprocess.check_output(['file', '--mime', fpath]).split()[1][:-1]
+        return mime_type in ('application/x-archive', 'application/x-sharedlib', 'application/x-executable')
+    else:
+        raise OSError('os_compiled not supported on this os')
 
 
 def run_pip_command(command_args, pip_version=None, python_version=None):
@@ -254,7 +272,12 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
         cmd.append("--no-deps")
     cmd.append(source_name)
 
-    _cmd(context=context, command=cmd)
+    env = {
+        'PYTHONPATH': destpath,
+    }
+    config.parent_variables.append('PYTHONPATH')
+
+    _cmd(context=context, command=cmd, environ=env)
     _system = System()
 
     # Collect resulting python packages using distlib
@@ -280,6 +303,9 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
         tools = []
         src_dst_lut = {}
 
+        # detect if platform/arch/os necessary, no if pure python
+        compiled = False
+
         for installed_file in distribution.list_installed_files(allow_fail=True):
             source_file = os.path.normpath(os.path.join(destpath, installed_file[0]))
 
@@ -298,6 +324,9 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
                     _, _file = os.path.split(destination_file)
                     tools.append(_file)
                     exe = True
+
+                if not compiled and is_compiled(source_file):
+                    compiled = True
 
                 data = [destination_file, exe, shebang]
                 src_dst_lut[source_file] = data
@@ -334,11 +363,13 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
                     shutil.copystat(source_file, destination_file)
 
         # determine variant requirements
-        # TODO detect if platform/arch/os necessary, no if pure python
+
         variant_reqs = []
         if default_variant: 
             for variant in default_variant:
                 variant_tokens = variant.split("-", 1)
+                if not compiled and variant_tokens[0] in ["platform", "arch", "os"]:
+                    continue
                 if variant_tokens[0] not in ["platform", "arch", "os"]:
                     continue
                 if len(variant_tokens) == 1:
@@ -385,14 +416,19 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
     return installed_variants, skipped_variants
 
 
-def _cmd(context, command):
+def _cmd(context, command, environ=None):
     cmd_str = ' '.join(quote(x) for x in command)
     _log("running: %s" % cmd_str)
 
+    parent_environ = None
+    if environ is not None:
+        parent_environ = os.environ.copy()
+        parent_environ.update(environ)
+
     if context is None:
-        p = subprocess.Popen(command)
+        p = subprocess.Popen(command, env=environ)
     else:
-        p = context.execute_shell(command=command, block=False)
+        p = context.execute_shell(command=command, block=False, parent_environ=parent_environ)
 
     p.wait()
 
