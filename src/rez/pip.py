@@ -72,8 +72,8 @@ def _get_dependencies(requirement, distributions):
                         result.append('!{}-{}'.format(get_distrubution_name(name), version[2:]))
                         continue
                     versions.append(version)
-                version = "".join(versions)
 
+                version = "".join(sorted(versions, reverse=True))
             name = get_distrubution_name(name)
             result.append("-".join([name, version]))
         else:
@@ -287,14 +287,10 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
     _cmd(context=context, command=cmd, environ=env)
     _system = System()
 
-    # Get the PYTHONPATHS for extra_packages
-    if ignore_installed or extra_packages is None:
-        contexts_paths = []
-    elif extra_packages:
-        extra_packages_context = ResolvedContext(extra_packages)
-        contexts_paths = extra_packages_context.get_environ().get("PYTHONPATH")
-        if contexts_paths is not None:
-            contexts_paths = contexts_paths.split(":")
+    # Get the PYTHONPATHS for context
+    contexts_paths = context.get_environ().get("PYTHONPATH")
+    if contexts_paths is not None:
+        contexts_paths = contexts_paths.split(os.pathsep)
 
     # Collect resulting python packages and extra_packages using distlib
     distribution_path = DistributionPath([destpath]+contexts_paths, include_egg=True)
@@ -304,8 +300,8 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
         # We are skipping distributions that are not part of the pip install
         if not distribution.path.startswith(destpath):
             pip_to_rez_name = distribution.name.replace("-", "_")
-            if list(filter(lambda x: x.startswith(pip_to_rez_name), extra_packages)):
-                installed_package = extra_packages_context.get_resolved_package(pip_to_rez_name)
+            if list(filter(lambda x: x.startswith(pip_to_rez_name), (p.name for p in context.resolved_packages))):
+                installed_package = context.get_resolved_package(pip_to_rez_name)
                 print "Requirement", distribution.name, "already satisfied by rez package", installed_package.qualified_package_name
             continue
 
