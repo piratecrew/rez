@@ -288,9 +288,9 @@ def pip_install_package(source_name, pip_version=None, python_version=None,
     _system = System()
 
     # Get the PYTHONPATHS for extra_packages
-    if ignore_installed:
-        contexts_paths =[]
-    else:
+    if ignore_installed or extra_packages is None:
+        contexts_paths = []
+    elif extra_packages:
         extra_packages_context = ResolvedContext(extra_packages)
         contexts_paths = extra_packages_context.get_environ().get("PYTHONPATH")
         if contexts_paths is not None:
